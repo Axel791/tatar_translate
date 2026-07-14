@@ -74,6 +74,12 @@ work/batches/wave_*.jsonl     результаты агентов — ЕДИНС
 - `Date.now()`/`Math.random()` в Workflow-скриптах недоступны.
 - Если воркфлоу падает по лимитам подписки — пауза до сброса окна (обычно до 5 ч);
   чекпоинт ничего не теряет, продолжить тем же циклом.
+- **Рейт-лимиты (лестница нагрузки).** Ошибка «Server is temporarily limiting requests» = аккаунт
+  временно душат за конкурентность. Замерено 2026-07-14: свежий аккаунт (M2 Pro) держит 3×8=24;
+  прогретый — нет (падает треть батчей). Правило: начинай с 3×8; поймал такие ошибки —
+  останови воркфлоу, `merge` (готовое не пропадёт), дальше работай **1–2 воркфлоу × 8** и дай
+  аккаунту пару минут остыть. Шаблон ниже сам дострелит упавшие батчи в конце (самолечение).
+- После merge готовые батчи никогда не переводятся повторно — перезапуски безопасны.
 
 ### Шаблон воркфлоу (подставь: ROOT = абсолютный путь репо на этой машине, список батчей, номера)
 
@@ -85,10 +91,7 @@ export const meta = {
 }
 const ROOT = '<АБСОЛЮТНЫЙ_ПУТЬ_К_РЕПО>'
 const JOBS = ['mNpP_b01','mNpP_b02','mNpP_b03','mNpP_b04','mNpP_b05','mNpP_b06','mNpP_b07','mNpP_b08']
-phase('Перевод')
-const results = await pipeline(
-  JOBS,
-  name => agent(
+const PROMPT = name =>
 `Ты — профессиональный переводчик с русского на литературный татарский язык.
 
 1. Прочитай стайлгайд полностью: ${ROOT}/work/style_guide_dost.md — он ОБЯЗАТЕЛЕН: наградная терминология (Почетная грамота → Мактау грамотасы и т.д.), топонимы Татарстана (Казань → Казан, Зеленодольск → Яшел Үзән...), татаризация имён (Альфия → Әлфия, Кабировна → Кәбировна; неочевидные формы не изобретать), изафет, порядок слов, даты («января» → «гыйнвар»), аббревиатуры (ООО → ҖЧҖ...), краевые случаи.
@@ -104,13 +107,20 @@ const results = await pipeline(
 4. Запиши результат через Write в файл: ${ROOT}/work/batches/wave_${name}.jsonl — ровно столько строк, сколько объектов во входном массиве; каждая строка — валидный JSON {"k": "<тот же ключ>", "tt": "<перевод>"}; UTF-8, кириллица как есть (не \\u-эскейпы).
 5. В финальном сообщении верни ТОЛЬКО: «OK <число переведённых>» и до 3 сомнительных ключей с причиной одной строкой.
 
-Работай автономно до конца, вопросов не задавай.`,
-    { label: name, phase: 'Перевод', model: 'sonnet', effort: 'max', agentType: 'general-purpose' }
-  )
-)
-const ok = results.filter(Boolean).length
-log('Готово агентов: ' + ok + '/' + JOBS.length)
-return { done: ok, total: JOBS.length }
+Работай автономно до конца, вопросов не задавай.`
+const OPTS = (name, tag) => ({ label: name + (tag || ''), phase: 'Перевод', model: 'sonnet', effort: 'max', agentType: 'general-purpose' })
+phase('Перевод')
+const results = await pipeline(JOBS, name => agent(PROMPT(name), OPTS(name)))
+const failed = JOBS.filter((j, i) => !results[i])
+log('Первый проход: ' + (JOBS.length - failed.length) + '/' + JOBS.length + '; на самолечение: ' + failed.length)
+let healed = 0
+for (const name of failed) {
+  const r = await agent(PROMPT(name), OPTS(name, ':retry'))
+  if (r) healed++
+}
+const ok = JOBS.length - failed.length + healed
+log('Итог: ' + ok + '/' + JOBS.length)
+return { done: ok, total: JOBS.length, healed }
 ```
 
 Второй и третий воркфлоу — то же самое с b09–b16 и b17–b24 (и своими name/description).
