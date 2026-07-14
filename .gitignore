@@ -4,3 +4,4 @@ __pycache__/
 .claude/
 work/queue/
 work/retry_keys.txt
+.idea/
