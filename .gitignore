@@ -1,0 +1,6 @@
+.venv/
+__pycache__/
+.DS_Store
+.claude/
+work/queue/
+work/retry_keys.txt
